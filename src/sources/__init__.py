@@ -1,5 +1,5 @@
-"""Sumber data pipeline scraping: FIRMS, MAGMA, dan Open-Meteo."""
+"""Sumber data pipeline scraping: FIRMS, MAGMA, Open-Meteo, OpenWeatherMap."""
 
 from src.sources import air_quality, firms, magma, weather
 
-__all__ = ["air_quality", "firms", "magma", "weather"]
+__all__ = ["firms", "magma", "air_quality", "weather"]
