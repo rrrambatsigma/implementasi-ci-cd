@@ -117,9 +117,9 @@ def test_cd_verifikasi_nama_dan_ukuran_blob() -> None:
     text = CD_FILE.read_text(encoding="utf-8")
 
     assert "properties.contentLength" in text
-    assert "Ukuran file berbeda" in text
-    assert "missing or extra or mismatched" in text
-    assert 'f"{prefix}/"' in text
+    assert "verify-blobs" in text
+    assert '--prefix "${PREFIX}/"' in text
+    assert '--prefix "$PREFIX"' in text
 
 
 def test_cd_summary_menerima_status_semua_tahap() -> None:

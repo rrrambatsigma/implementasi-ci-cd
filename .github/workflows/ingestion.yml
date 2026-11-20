@@ -113,95 +113,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          python - <<'PY'
-          import json
-          import os
-          import subprocess
-          import sys
-          from pathlib import Path
+          : "${PREFIX:?Prefix blob kosong}"
 
-          prefix = os.environ.get("PREFIX", "").strip()
+          az storage blob list \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --container-name "$AZURE_STORAGE_CONTAINER" \
+            --prefix "${PREFIX}/" \
+            --auth-mode login \
+            --query "[].{name: name, size: properties.contentLength}" \
+            -o json > "$RUNNER_TEMP/blob-listing.json"
 
-          if not prefix:
-              raise SystemExit("Prefix blob kosong; upload tidak dapat diverifikasi.")
-
-          account = os.environ["AZURE_STORAGE_ACCOUNT"]
-          container = os.environ["AZURE_STORAGE_CONTAINER"]
-
-          staging = Path("build/blob")
-
-          expected = {
-              str(path.relative_to(staging)).replace("\\", "/"): path.stat().st_size
-              for path in staging.rglob("*")
-              if path.is_file()
-          }
-
-          result = subprocess.run(
-              [
-                  "az", "storage", "blob", "list",
-                  "--account-name", account,
-                  "--container-name", container,
-                  "--prefix", f"{prefix}/",
-                  "--auth-mode", "login",
-                  "--query", "[].{name: name, size: properties.contentLength}",
-                  "-o", "json",
-              ],
-              capture_output=True,
-              text=True,
-          )
-
-          if result.returncode != 0:
-              print(result.stderr, file=sys.stderr)
-              raise SystemExit("Gagal membaca daftar blob.")
-
-          try:
-              blobs = json.loads(result.stdout or "[]")
-          except json.JSONDecodeError as error:
-              raise SystemExit(f"Respons daftar blob bukan JSON valid: {error}")
-
-          if not isinstance(blobs, list):
-              raise SystemExit("Respons daftar blob tidak valid.")
-
-          actual = {}
-
-          for blob in blobs:
-              name = str(blob.get("name", ""))
-
-              if not name.startswith(f"{prefix}/"):
-                  continue
-
-              actual[name[len(prefix) + 1:]] = blob.get("size")
-
-          missing = sorted(set(expected) - set(actual))
-          extra = sorted(set(actual) - set(expected))
-          mismatched = sorted(
-              name
-              for name in set(expected) & set(actual)
-              if expected[name] != actual[name]
-          )
-
-          print(f"File lokal: {len(expected)}, file di blob: {len(actual)}")
-
-          if missing:
-              print("Tidak ditemukan di blob:")
-              for name in missing:
-                  print(f"  - {name}")
-
-          if extra:
-              print("Ada di blob tetapi tidak di staging:")
-              for name in extra:
-                  print(f"  - {name}")
-
-          if mismatched:
-              print("Ukuran file berbeda:")
-              for name in mismatched:
-                  print(f"  - {name}: lokal={expected[name]} byte, blob={actual[name]} byte")
-
-          if missing or extra or mismatched:
-              raise SystemExit(1)
-
-          print("Verifikasi upload: PASS (nama dan ukuran file sesuai)")
-          PY
+          python scripts/cd_helpers.py verify-blobs \
+            --staging build/blob \
+            --prefix "$PREFIX" \
+            --input "$RUNNER_TEMP/blob-listing.json"
 
       - name: Write GitHub Actions summary
         if: always()
