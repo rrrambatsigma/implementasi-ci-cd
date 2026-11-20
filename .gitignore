@@ -1,0 +1,26 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Scraping output (disimpan di Azure Blob Storage)
+data/*
+!data/.gitkeep
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
