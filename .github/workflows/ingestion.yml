@@ -1,0 +1,231 @@
+name: Continuous Deployment (Azure Blob Storage)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ingestion-deploy
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT }}
+  AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_STORAGE_CONTAINER }}
+
+jobs:
+  deploy:
+    name: Scrape and Upload
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraping pipeline (strict)
+        id: scrape
+        env:
+          FIRMS_MAP_KEY: ${{ secrets.FIRMS_API_KEY }}
+        run: python -m src.main --strict
+
+      - name: Validate scraping result and manifest
+        id: validate
+        run: python scripts/cd_helpers.py validate --data-dir data
+
+      - name: Azure login (OIDC)
+        id: azure-login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prepare blob staging
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_slot=$(python -c "import json; print(json.load(open('data/manifest.json'))['run_slot'])")
+          prefix="runs/${run_slot}"
+
+          mkdir -p build/blob
+          rsync -a --exclude='.gitkeep' data/ build/blob/
+
+          if find build/blob -type f \( -name '.env' -o -name '*.pem' -o -name '*.key' \
+            -o -name '*.p12' -o -name '*.pfx' \) | grep -q .; then
+            echo "::error::File sensitif terdeteksi di staging. Upload dibatalkan."
+            exit 1
+          fi
+
+          files=$(find build/blob -type f | wc -l)
+
+          if [ "$files" -eq 0 ]; then
+            echo "::error::Staging kosong; tidak ada file hasil untuk diunggah."
+            exit 1
+          fi
+
+          echo "prefix=${prefix}" >> "$GITHUB_OUTPUT"
+          echo "files=${files}" >> "$GITHUB_OUTPUT"
+          echo "Staging: ${files} file pada prefix ${prefix}"
+
+      - name: Upload to Azure Blob Storage
+        id: upload
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : "${AZURE_STORAGE_ACCOUNT:?AZURE_STORAGE_ACCOUNT belum diset}"
+          : "${AZURE_STORAGE_CONTAINER:?AZURE_STORAGE_CONTAINER belum diset}"
+
+          az storage blob upload-batch \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --destination "$AZURE_STORAGE_CONTAINER" \
+            --destination-path "${{ steps.prepare.outputs.prefix }}" \
+            --source build/blob \
+            --auth-mode login \
+            --overwrite \
+            --only-show-errors
+
+      - name: Verify uploaded blobs
+        id: verify
+        shell: bash
+        env:
+          PREFIX: ${{ steps.prepare.outputs.prefix }}
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          prefix = os.environ.get("PREFIX", "").strip()
+
+          if not prefix:
+              raise SystemExit("Prefix blob kosong; upload tidak dapat diverifikasi.")
+
+          account = os.environ["AZURE_STORAGE_ACCOUNT"]
+          container = os.environ["AZURE_STORAGE_CONTAINER"]
+
+          staging = Path("build/blob")
+
+          expected = {
+              str(path.relative_to(staging)).replace("\\", "/"): path.stat().st_size
+              for path in staging.rglob("*")
+              if path.is_file()
+          }
+
+          result = subprocess.run(
+              [
+                  "az", "storage", "blob", "list",
+                  "--account-name", account,
+                  "--container-name", container,
+                  "--prefix", f"{prefix}/",
+                  "--auth-mode", "login",
+                  "--query", "[].{name: name, size: properties.contentLength}",
+                  "-o", "json",
+              ],
+              capture_output=True,
+              text=True,
+          )
+
+          if result.returncode != 0:
+              print(result.stderr, file=sys.stderr)
+              raise SystemExit("Gagal membaca daftar blob.")
+
+          try:
+              blobs = json.loads(result.stdout or "[]")
+          except json.JSONDecodeError as error:
+              raise SystemExit(f"Respons daftar blob bukan JSON valid: {error}")
+
+          if not isinstance(blobs, list):
+              raise SystemExit("Respons daftar blob tidak valid.")
+
+          actual = {}
+
+          for blob in blobs:
+              name = str(blob.get("name", ""))
+
+              if not name.startswith(f"{prefix}/"):
+                  continue
+
+              actual[name[len(prefix) + 1:]] = blob.get("size")
+
+          missing = sorted(set(expected) - set(actual))
+          extra = sorted(set(actual) - set(expected))
+          mismatched = sorted(
+              name
+              for name in set(expected) & set(actual)
+              if expected[name] != actual[name]
+          )
+
+          print(f"File lokal: {len(expected)}, file di blob: {len(actual)}")
+
+          if missing:
+              print("Tidak ditemukan di blob:")
+              for name in missing:
+                  print(f"  - {name}")
+
+          if extra:
+              print("Ada di blob tetapi tidak di staging:")
+              for name in extra:
+                  print(f"  - {name}")
+
+          if mismatched:
+              print("Ukuran file berbeda:")
+              for name in mismatched:
+                  print(f"  - {name}: lokal={expected[name]} byte, blob={actual[name]} byte")
+
+          if missing or extra or mismatched:
+              raise SystemExit(1)
+
+          print("Verifikasi upload: PASS (nama dan ukuran file sesuai)")
+          PY
+
+      - name: Write GitHub Actions summary
+        if: always()
+        shell: bash
+        env:
+          SCRAPE_STATUS: ${{ steps.scrape.outcome }}
+          VALIDATE_STATUS: ${{ steps.validate.outcome }}
+          LOGIN_STATUS: ${{ steps.azure-login.outcome }}
+          STAGE_STATUS: ${{ steps.prepare.outcome }}
+          UPLOAD_STATUS: ${{ steps.upload.outcome }}
+          VERIFY_STATUS: ${{ steps.verify.outcome }}
+        run: |
+          set -euo pipefail
+
+          python scripts/cd_helpers.py summary \
+            --manifest data/manifest.json \
+            --prefix "${{ steps.prepare.outputs.prefix }}" \
+            --files-dir build/blob \
+            --scrape "${SCRAPE_STATUS:-skipped}" \
+            --validate "${VALIDATE_STATUS:-skipped}" \
+            --login "${LOGIN_STATUS:-skipped}" \
+            --stage "${STAGE_STATUS:-skipped}" \
+            --upload "${UPLOAD_STATUS:-skipped}" \
+            --verify "${VERIFY_STATUS:-skipped}" \
+            --account "${{ vars.AZURE_STORAGE_ACCOUNT }}" \
+            --container "${{ vars.AZURE_STORAGE_CONTAINER }}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"

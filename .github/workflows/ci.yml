@@ -48,7 +48,7 @@ jobs:
   scrape:
     name: Run Scraper
     needs: test
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
