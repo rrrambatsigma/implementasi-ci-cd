@@ -1,26 +1,38 @@
 # Virtual environment
 .venv/
 venv/
-
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
+env/
 
 # Environment & secrets
 .env
 .env.*
 !.env.example
 
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
 # Scraping output (disimpan di Azure Blob Storage)
 data/*
 !data/.gitkeep
+
+# Logs & temporary files
+*.log
+*.tmp
 
 # Editor / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+desktop.ini
