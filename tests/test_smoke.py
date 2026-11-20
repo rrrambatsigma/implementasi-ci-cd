@@ -1,10 +1,15 @@
-"""Tes smoke untuk memastikan struktur proyek dan konfigurasi valid."""
+"""Tes smoke untuk konfigurasi dasar pipeline."""
 
-from src.config import INDONESIA_BBOX, LOCATIONS
+from src.config import INDONESIA_BBOX, MONITORING_POINTS
 
 
-def test_bbox_mengandung_indonesia() -> None:
-    west, south, east, north = INDONESIA_BBOX
+def test_bbox_indonesia_valid() -> None:
+    parts = [float(value) for value in INDONESIA_BBOX.split(",")]
+
+    assert len(parts) == 4
+
+    west, south, east, north = parts
+
     assert west < east
     assert south < north
     assert -180 <= west <= 180
@@ -12,7 +17,10 @@ def test_bbox_mengandung_indonesia() -> None:
 
 
 def test_setiap_lokasi_punya_koordinat_valid() -> None:
-    assert LOCATIONS
-    for location in LOCATIONS:
-        assert -90 <= location["latitude"] <= 90
-        assert -180 <= location["longitude"] <= 180
+    assert MONITORING_POINTS
+
+    for point in MONITORING_POINTS:
+        assert point["province"]
+        assert point["city"]
+        assert -90 <= point["lat"] <= 90
+        assert -180 <= point["lon"] <= 180
