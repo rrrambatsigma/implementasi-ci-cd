@@ -1,3 +1,4 @@
+
 name: Continuous Integration
 
 on:
@@ -65,24 +66,32 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Check FIRMS secret availability
+        env:
+          FIRMS_MAP_KEY: ${{ secrets.FIRMS_API_KEY }}
+        run: |
+          if [ -n "$FIRMS_MAP_KEY" ]; then
+            echo "FIRMS_MAP_KEY tersedia."
+          else
+            echo "::error::FIRMS_MAP_KEY tidak tersedia. Periksa repository secret FIRMS_API_KEY."
+            exit 1
+          fi
+
       - name: Run scraping pipeline
         env:
-          FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
+          FIRMS_MAP_KEY: ${{ secrets.FIRMS_API_KEY }}
         run: python -m src.main
 
       - name: Show manifest
         if: always()
         run: |
           if [ -f data/manifest.json ]; then
-            cat data/manifest.json
-            {
-              echo "### Hasil scraping"
-              echo '```json'
-              cat data/manifest.json
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            echo "### Hasil scraping" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat data/manifest.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "manifest tidak dibuat"
+            echo "Manifest tidak dibuat." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload scraping result
