@@ -1,0 +1,104 @@
+
+name: Continuous Integration
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  test:
+    name: Test Scraping Application
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff check
+        run: ruff check .
+
+      - name: Run automated tests
+        run: pytest -q
+
+  scrape:
+    name: Run Scraper
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check FIRMS secret availability
+        env:
+          FIRMS_MAP_KEY: ${{ secrets.FIRMS_API_KEY }}
+        run: |
+          if [ -n "$FIRMS_MAP_KEY" ]; then
+            echo "FIRMS_MAP_KEY tersedia."
+          else
+            echo "::error::FIRMS_MAP_KEY tidak tersedia. Periksa repository secret FIRMS_API_KEY."
+            exit 1
+          fi
+
+      - name: Run scraping pipeline
+        env:
+          FIRMS_MAP_KEY: ${{ secrets.FIRMS_API_KEY }}
+        run: python -m src.main
+
+      - name: Show manifest
+        if: always()
+        run: |
+          if [ -f data/manifest.json ]; then
+            echo "### Hasil scraping" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat data/manifest.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Manifest tidak dibuat." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload scraping result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraping-output-${{ github.run_id }}
+          path: data/
+          if-no-files-found: warn
+          retention-days: 7
